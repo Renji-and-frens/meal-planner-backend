@@ -1,0 +1,11 @@
+@MPWebApi_HostAddress = http://localhost:5183
+
+GET {{MPWebApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
+
+PUT {{MPWebApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
