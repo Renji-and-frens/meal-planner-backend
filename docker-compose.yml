@@ -1,0 +1,18 @@
+version: 'v3'
+services:
+  mysql:
+    container_name: meal-planner-db
+    image: mysql:8.2.0
+    ports:
+      - "3306:3306"
+    volumes:
+      - $PWD/db_data:/var/lib/mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=password
+      - MYSQL_DATABASE=mealplanner
+      - MYSQL_USER=Db@username
+      - MYSQL_PASSWORD=Db@password
+    networks:
+      - mealplanner-network
+networks:
+  mealplanner-network:
