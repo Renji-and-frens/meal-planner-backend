@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Markdig.Syntax;
+using Markdig;
 using System.IO;
 using System.Collections.Generic;
 
@@ -27,10 +28,15 @@ namespace BasedCookingRecipeParse
                 Console.WriteLine(fileName);
             }
 
-
-
-
             //read each recipe
+            foreach(var recipePath in recipePaths)
+            {
+                var markdown = File.ReadAllText(recipePath);
+                var document = Markdown.Parse(markdown);
+
+                var allParagraph = document.Descendants<ParagraphBlock>().ToArray();
+
+            }
         }
     }
 }
