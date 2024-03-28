@@ -1,4 +1,6 @@
-﻿using System;
+﻿using Markdig.Syntax;
+using Markdig;
+using System;
 
 namespace BasedCookingRecipeParse
 {
@@ -15,11 +17,15 @@ namespace BasedCookingRecipeParse
             List<string> recipePaths = new List<string>();
             //find all recipes in parent folder and append into recipePaths
 
-
-
-
-
             //read each recipe
+            foreach(var recipePath in recipePaths)
+            {
+                var markdown = File.ReadAllText(recipePath);
+                var document = Markdown.Parse(markdown);
+
+                var allParagraph = document.Descendants<ParagraphBlock>().ToArray();
+
+            }
         }
     }
 }
