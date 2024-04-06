@@ -1,6 +1,5 @@
-﻿using Markdig.Syntax;
-using Markdig;
-using BasedCookingRecipeParser;
+﻿using System.Text.RegularExpressions;
+using MPBackEnd.Common.Models;
 
 namespace BasedCookingRecipeParse
 {
@@ -10,7 +9,7 @@ namespace BasedCookingRecipeParse
         {
             Console.WriteLine("Running based.cooking Recipe Parser...");
             Console.WriteLine("Please paste the path to the folder that has all the based.cooking recipe files to be parsed: ");
-
+            
             string? recipeParentPath = null;
 
             while(recipeParentPath == null)
@@ -18,25 +17,34 @@ namespace BasedCookingRecipeParse
                 recipeParentPath = Console.ReadLine();
             }
 
-            Console.WriteLine($"Checking folder {recipeParentPath}...");
+            Console.WriteLine($"\n-------------------------\n" +
+                $"Checking folder {recipeParentPath}...");
             try
             {
                 string[] filePaths = Directory.GetFiles(recipeParentPath);
 
-                List<TemporaryRecipeModel> temporaryRecipeModels = new List<TemporaryRecipeModel>();
+                List<Recipe> recipeModels = new List<Recipe>();
 
                 Console.WriteLine("Files in the parent directory:");
                 int count = 0;
                 foreach (string filePath in filePaths)
                 {
-                    Console.WriteLine($"Processing file: {filePath}...");
-                    temporaryRecipeModels.Add(ParseIntoRecipeModel(filePath));
-                    count++;
+                    try
+                    {
+                        count++;
+                        Console.WriteLine($"\n\n-------------------------\n" + 
+                            $"#{count} - Processing file: {Path.GetFileName(filePath)}...");
+                        recipeModels.Add(ParseRecipeModel(filePath));
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"{ex.Message}");
+                    }
                 }
                 Console.WriteLine($"Batch completed. A total of {count} files processed and parsed.");
 
                 Console.WriteLine($"Attempting to upload to database...");
-                if(AddToDatabase(temporaryRecipeModels))
+                if(AddToDatabase(recipeModels))
                 {
                     Console.WriteLine($"Upload succeeded!");
                 }
@@ -48,74 +56,118 @@ namespace BasedCookingRecipeParse
             catch(Exception ex)
             {
                 Console.WriteLine($"{ex.Message}");
-                return;
             }
         }
 
         //ignore logic of this function for now, to be fixed, WIP
-        static TemporaryRecipeModel ParseIntoRecipeModel(string markdownFilePath)
+        static Recipe ParseRecipeModel(string markdownFilePath)
         {
             string markdownText = File.ReadAllText(markdownFilePath);
 
-            var pipeline = new MarkdownPipelineBuilder().UseYamlFrontMatter().Build();
-            var document = Markdown.Parse(markdownText, pipeline);
+            var splitText = markdownText.Split("---", StringSplitOptions.RemoveEmptyEntries);
+            var metadataText = splitText.First().Trim();
+            var content = string.Join("---", splitText.Skip(1)).Trim();
 
-            var frontmatter = document.GetData<Dictionary<string, string>>();
+            var metadata = ExtractMetadata(metadataText);
 
-            var recipeInfo = new TemporaryRecipeModel
-            {
-                Title = frontmatter["title"],
-                Tags = frontmatter["tags"].Trim('[', ']').Split(',').ToList(),
-                Date = DateTime.Parse(frontmatter["date"]),
-                Author = frontmatter["author"],
-                ShortDesc = frontmatter["shortdesc"],
-                PrepTime = frontmatter["preptime"],
-                CookTime = frontmatter["cooktime"],
-                Servings = frontmatter["servings"],
-                Ingredients = ExtractListItems(document, "Ingredients"),
-                Directions = ExtractListItems(document, "Directions")
-            };
+            var recipeInfo = new Recipe();
+
+            // Parse metadata
+            recipeInfo.Name = metadata.GetValueOrDefault("title", "NULL").Trim().Replace("\"", "");
+            var author = metadata.GetValueOrDefault("author", "");
+            var tagsAttached = metadata.GetValueOrDefault("tags", "").Trim('[', ']').Split(',').ToList();
+
+            // Parse prep time, cook time, and servings from content
+            var prepTime = ExtractFromContent(content, "Prep time:");
+            var cookTime = ExtractFromContent(content, "Cook time:");
+            recipeInfo.PrepTime = ParseTimeToSeconds(prepTime);
+            recipeInfo.CookTime = ParseTimeToSeconds(cookTime);
+            recipeInfo.Servings = int.Parse(ExtractFromContent(content, "Servings:"));
+
+            // Parse ingredients (WIP)
+
+
+            // Parse instructions
+            var instructionString = ExtractFromContent(content, "Directions", null);
 
             return recipeInfo;
         }
 
-
-        //ignore logic of this function for now, to be fixed, WIP
-        static List<string> ExtractListItems(Markdig.Syntax.MarkdownDocument document, string sectionHeading)
+        static int ParseTimeToSeconds(string time)
         {
-            var listItems = new List<string>();
+            // Remove special characters such as :, ~ EXCEPT -
+            time = Regex.Replace(time, @"[~: ()]", "");
 
-            foreach (var block in document)
+            // Match digits followed by "h" and digits followed by "m"
+            var matches = Regex.Matches(time, @"\d+h|\d+m");
+
+            // Concatenate matched substrings
+            string trimmedTimeString = "";
+            foreach (Match m in matches)
             {
-                if (block is Markdig.Syntax.ListBlock listBlock &&
-                    listBlock.IsOrdered &&
-                    listBlock.FirstChild is Markdig.Syntax.ListItemBlock listItem &&
-                    listItem.Inline.FirstOrDefault() is Markdig.Syntax.ParagraphBlock paragraph &&
-                    paragraph.Inline.FirstOrDefault() is Markdig.Syntax.HtmlTag htmlTag &&
-                    htmlTag.Tag == "h2" &&
-                    htmlTag.GetAttributes().First().Value == sectionHeading)
+                trimmedTimeString += m.Value;
+            }
+
+            // Extract hours and minutes
+            int hours = 0;
+            int minutes = 0;
+            Match match = Regex.Match(time, @"\d+h");
+            if (match.Success)
+            {
+                hours = int.Parse(match.Groups[0].Value);
+            }
+            match = Regex.Match(time, @"\d+m");
+            if (match.Success)
+            {
+                var minuteAmount = match.Groups[0].Value.TrimEnd('m');
+                minutes = int.Parse(minuteAmount);
+            }
+
+            // Convert hours and minutes to total seconds
+            int totalSeconds = hours * 3600 + minutes * 60;
+            return totalSeconds;
+        }
+
+        static Dictionary<string, string> ExtractMetadata(string metadataText)
+        {
+            var metadata = new Dictionary<string, string>();
+
+            var lines = metadataText.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var line in lines)
+            {
+                var parts = line.Split(':');
+                if (parts.Length == 2)
                 {
-                    foreach (var item in listBlock)
-                    {
-                        if (item is ListItemBlock listItemBlock)
-                        {
-                            foreach (var paragraphBlock in listItemBlock)
-                            {
-                                if (paragraphBlock is Markdig.Syntax.ParagraphBlock paragraphBlock2)
-                                {
-                                    listItems.Add(paragraphBlock2.Inline.ToString());
-                                }
-                            }
-                        }
-                    }
+                    var key = parts[0].Trim();
+                    var value = parts[1].Trim();
+                    metadata[key] = value;
                 }
             }
 
-            return listItems;
+            return metadata;
+        }
+
+        static string ExtractFromContent(string content, string keyword, string endCharacterOfContent = "\n")
+        {
+            var index = content.IndexOf(keyword);
+            if (index != -1)
+            {
+                var startIndex = index + keyword.Length;
+                if (endCharacterOfContent == null)
+                {
+                    return content.Substring(startIndex);
+                }
+                var endIndex = content.IndexOf(endCharacterOfContent, startIndex);
+                if (endIndex != -1)
+                {
+                    return content.Substring(startIndex, endIndex - startIndex).Trim();
+                }
+            }
+            return "";
         }
 
         //ignore logic of this function for now, to be fixed, WIP
-        static bool AddToDatabase(List<TemporaryRecipeModel> recipeModels)
+        static bool AddToDatabase(List<Recipe> recipeModels)
         {
 
             return false;

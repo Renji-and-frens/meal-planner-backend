@@ -12,6 +12,7 @@
         public string   OriginId         { get; set; }
         public int      PrepTime         { get; set; }
         public int      CookTime         { get; set; }
+        public int      Servings         { get; set; }
         public string   Instructions     { get; set; }
         public int      LikeCount        { get; set; }
         public int      Difficulty       { get; set; }
