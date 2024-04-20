@@ -1,11 +1,16 @@
 ﻿using System.Text.RegularExpressions;
+using BasedCookingRecipeParser;
+using Microsoft.Extensions.Hosting;
 using MPBackEnd.Common.Models;
+using MPBackEnd.Common.Models.JsonModels;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace BasedCookingRecipeParse
 {
     public class Program
     {
-        static void Main(string[] args)
+        static async Task Main(string[] args)
         {
             Console.WriteLine("Running based.cooking Recipe Parser...");
             Console.WriteLine("Please paste the path to the folder that has all the based.cooking recipe files to be parsed: ");
@@ -26,31 +31,50 @@ namespace BasedCookingRecipeParse
                 List<Recipe> recipeModels = new List<Recipe>();
 
                 Console.WriteLine("Files in the parent directory:");
-                int count = 0;
+                int successCount = 0;
+                int totalCount = 0;
+
+                var openAIClient = new OpenAIClient();
+
                 foreach (string filePath in filePaths)
                 {
                     try
                     {
-                        count++;
+                        if (Path.GetExtension(filePath) != ".md")
+                        {
+                            continue;
+                        }
+                        totalCount++;
                         Console.WriteLine($"\n\n-------------------------\n" + 
-                            $"#{count} - Processing file: {Path.GetFileName(filePath)}...");
-                        recipeModels.Add(ParseRecipeModel(filePath));
+                            $"#{successCount + 1} - Processing file: {Path.GetFileName(filePath)}...");
+                        var recipe = ParseRecipeModel(filePath, openAIClient);
+                        if (recipe != null)
+                        {
+                            recipeModels.Add(recipe);
+                            successCount++;
+                        }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"{ex.Message}");
+                        Console.WriteLine($"{ex}");
                     }
                 }
-                Console.WriteLine($"Batch completed. A total of {count} files processed and parsed.");
+                Console.WriteLine($"\n\n\n\n-------------------------\n" + 
+                    $"COMPLETED!\n" +
+                    $"A total of {successCount} files processed and parsed out of {totalCount} files.");
 
-                Console.WriteLine($"Attempting to upload to database...");
-                if(AddToDatabase(recipeModels))
+                try
                 {
-                    Console.WriteLine($"Upload succeeded!");
+                    Console.WriteLine($"Attempting to save JSON results to same recipe folder path...");
+                    string json = JsonConvert.SerializeObject(recipeModels, Formatting.Indented);
+                    string resultFilePath = $"{recipeParentPath}\\{DateTime.Now.ToString("yyyy-MM-dd HHmmss")}_ingredient_details.json";
+                    File.WriteAllText(resultFilePath, json);
+                    Console.WriteLine($"JSON result file saved successfully to {resultFilePath}.");
                 }
-                else
+                catch(Exception ex)
                 {
-                    Console.WriteLine($"Upload failed!");
+                    Console.WriteLine("JSON result file saving error.");
+                    Console.WriteLine($"{ex.Message}");
                 }
             }
             catch(Exception ex)
@@ -59,8 +83,7 @@ namespace BasedCookingRecipeParse
             }
         }
 
-        //ignore logic of this function for now, to be fixed, WIP
-        static Recipe ParseRecipeModel(string markdownFilePath)
+        static Recipe ParseRecipeModel(string markdownFilePath, OpenAIClient client)
         {
             string markdownText = File.ReadAllText(markdownFilePath);
 
@@ -72,25 +95,116 @@ namespace BasedCookingRecipeParse
 
             var recipeInfo = new Recipe();
 
-            // Parse metadata
+            // Parse recipe name
             recipeInfo.Name = metadata.GetValueOrDefault("title", "NULL").Trim().Replace("\"", "");
-            var author = metadata.GetValueOrDefault("author", "");
-            var tagsAttached = metadata.GetValueOrDefault("tags", "").Trim('[', ']').Split(',').ToList();
+
+            // Parse date
+            recipeInfo.DateCreated = DateTime.Now;
+            recipeInfo.DateLastModified = DateTime.Now;
+
+            // Parse author and tags
+            recipeInfo.Author = new Author() { Name = metadata.GetValueOrDefault("author", "") };
+            var tagsAttached = metadata.GetValueOrDefault("tags", "").ToLower().Trim('[', ']').Split(',').ToList();
+            foreach ( var tag in tagsAttached )
+            {
+                recipeInfo.Tags.Add(new Tag() { Name = tag });
+            }
 
             // Parse prep time, cook time, and servings from content
-            var prepTime = ExtractFromContent(content, "Prep time:");
-            var cookTime = ExtractFromContent(content, "Cook time:");
-            recipeInfo.PrepTime = ParseTimeToSeconds(prepTime);
-            recipeInfo.CookTime = ParseTimeToSeconds(cookTime);
-            recipeInfo.Servings = int.Parse(ExtractFromContent(content, "Servings:"));
+            recipeInfo.PrepTime = ExtractPrepTime(content);
+            recipeInfo.CookTime = ExtractCookTime(content);
+            recipeInfo.Servings = ExtractServingSize(content);
 
-            // Parse ingredients (WIP)
+            // TODO: Parse ingredients
 
+            //AI prompting
+            //var prompt = $"This is a list of ingredients from one of many recipes. Please ONLY add a label at the end of each " +
+            //    $"valid ingredient line ' ||| <labelName>' and DO NOT alter ingredient details or format. This label is the" +
+            //    $" category that the ingredient is in (for example, green apples and red apples will be labeled as ' - apple';" +
+            //    $" basically no unnecessary adjectives). " + 
+            //    $"Do not make ambiguous labels across recipes such as 'apples' vs 'Apple'. 'chicken wing' vs 'chicken thigh' and " +
+            //    $"such details are fine. Don't be too generalized. The list of ingredients for this current recipe is:" +
+            //    $"\n{ExtractIngredients(content)}";
+            //var response = await client.GenerateResponse(prompt);
+            //if (response.IsSuccessStatusCode)
+            //{
+            //    var jsonResponse = await response.Content.ReadAsStringAsync();
+            //    var jsonObject = JObject.Parse(jsonResponse);
+
+            //    string responseString = (string)jsonObject["choices"][0]["message"]["content"];
+            //    recipeInfo.IngredientDetails = ParseIngredients(responseString);
+            //}
+            //else
+            //{
+            //    throw new Exception("OPENAI API CALL FAILED!!!");
+            //}
+
+            recipeInfo.IngredientDetails = ExtractIngredients(content);
 
             // Parse instructions
-            var instructionString = ExtractFromContent(content, "Directions", null);
+            recipeInfo.Instructions = ExtractInstructions(content);
+
+            Console.WriteLine(JsonConvert.SerializeObject(recipeInfo, Formatting.Indented));
 
             return recipeInfo;
+        }
+
+        static int ExtractPrepTime(string content)
+        {
+            var result = ParseTimeToSeconds(ExtractFromContent(content, "Prep time:"));
+            return result;
+        }
+
+        static int ExtractCookTime(string content)
+        {
+            var result = ParseTimeToSeconds(ExtractFromContent(content, "Cook time:"));
+            return result;
+        }
+
+        static int ExtractServingSize(string content)
+        {
+            string servingsString = ExtractFromContent(content, "Servings:");
+            var match = Regex.Match(servingsString, @"\d+-?");
+            if (match.Success)
+            {
+                var result = match.Value.TrimEnd('-');
+                return int.Parse(result);
+            }
+            return -1;
+        }
+
+        static List<string> ExtractInstructions(string content)
+        {
+            var instructionString = ExtractFromContent(content, "Directions", null);
+            var instructions = SeparateListElements(instructionString);
+
+            return instructions;
+        }
+
+        static List<string> ExtractIngredients(string content)
+        {
+            var result = ExtractFromContent(content, "Ingredients", "## ");
+
+            return SeparateListElements(result);
+        }
+
+        public static List<IngredientDetails> ParseIngredients(string ingredientsString)
+        {
+            List<IngredientDetails> ingredientDetailsList = new List<IngredientDetails>();
+
+            string[] lines = ingredientsString.Split('\n');
+
+            foreach (string line in lines)
+            {
+                var trimmed = line.Trim('-').Trim();
+
+                ingredientDetailsList.Add(new IngredientDetails
+                {
+                    Details = trimmed,
+                });
+            }
+
+            return ingredientDetailsList;
         }
 
         static int ParseTimeToSeconds(string time)
@@ -108,13 +222,13 @@ namespace BasedCookingRecipeParse
                 trimmedTimeString += m.Value;
             }
 
-            // Extract hours and minutes
             int hours = 0;
             int minutes = 0;
             Match match = Regex.Match(time, @"\d+h");
             if (match.Success)
             {
-                hours = int.Parse(match.Groups[0].Value);
+                var hourAmount = match.Groups[0].Value.TrimEnd('h');
+                hours = int.Parse(hourAmount);
             }
             match = Regex.Match(time, @"\d+m");
             if (match.Success)
@@ -123,7 +237,6 @@ namespace BasedCookingRecipeParse
                 minutes = int.Parse(minuteAmount);
             }
 
-            // Convert hours and minutes to total seconds
             int totalSeconds = hours * 3600 + minutes * 60;
             return totalSeconds;
         }
@@ -163,7 +276,27 @@ namespace BasedCookingRecipeParse
                     return content.Substring(startIndex, endIndex - startIndex).Trim();
                 }
             }
-            return "";
+            return "0";
+        }
+
+        static List<string> SeparateListElements(string input)
+        {
+            // Define regular expression pattern to match direction lines
+            string pattern = @"^((\d+\.)|(\-))\s*(.+)$";
+
+            // Match the pattern in the input string
+            MatchCollection matches = Regex.Matches(input, pattern, RegexOptions.Multiline);
+
+            // Extract the matched direction lines
+            List<string> directions = new List<string>();
+            foreach (Match match in matches)
+            {
+                // Group 4 contains the text of the direction line
+                string direction = match.Groups[4].Value.Trim();
+                directions.Add(direction);
+            }
+
+            return directions;
         }
 
         //ignore logic of this function for now, to be fixed, WIP
