@@ -29,12 +29,17 @@ namespace BasedCookingRecipeParse
                 string[] filePaths = Directory.GetFiles(recipeParentPath);
 
                 List<Recipe> recipeModels = new List<Recipe>();
+                List<Tag> tagMenu = new List<Tag>();
+                List<Tag> choseTag = new List<Tag>();
+                List<Tag> ignoreTag = new List<Tag>();
+                List<Recipe> recipeMenu = new List<Recipe>();
 
                 Console.WriteLine("Files in the parent directory:");
                 int successCount = 0;
                 int totalCount = 0;
 
                 var openAIClient = new OpenAIClient();
+                var recipeFilter = new RecipeFilter();
 
                 foreach (string filePath in filePaths)
                 {
@@ -51,7 +56,33 @@ namespace BasedCookingRecipeParse
                         if (recipe != null)
                         {
                             recipeModels.Add(recipe);
+                            foreach (var tag in recipe.Tags)
+                            {
+                                if (!tagMenu.Contains(tag))
+                                {
+                                    tagMenu.Add(tag);
+                                }
+                                foreach(var tagModel in tagMenu)
+                                {
+                                    if (string.Equals(tagModel.Name, tag.Name))
+                                    {
+                                        tagModel.UsedIn.Add(recipe.Name);
+                                    }
+                                }
+                                
+                            }
                             successCount++;
+                        }
+                        // show Tag menu to choose add tags or ignore tags
+                        // push choose tags to choseTag, ignore tags to ignoreTags
+
+                        if(choseTag.Count > 0 && ignoreTag.Count ==0)
+                        {
+                            recipeMenu = recipeFilter.RecipesWithFavTags(recipeModels, choseTag);
+                        }
+                        else if(choseTag.Count == 0 && ignoreTag.Count > 0) 
+                        {
+                            recipeMenu = recipeFilter.RecipesWithoutTags(recipeModels, ignoreTag);
                         }
                     }
                     catch (Exception ex)
